@@ -2,16 +2,23 @@
 """
 Build an automated Mexico speed & red-light camera feed (GATSO_ALL.csv) for Open Zeekr.
 
-Data sources:
-  - Source A: OpenStreetMap (nationwide Mexico via Overpass API, ODbL 1.0)
-  - Source B: Official CDMX Open Data — Fotocívicas (datos.cdmx.gob.mx, Libre Uso MX)
-              with automatic fallback to a committed local cache when unreachable.
+Data sources & precedence (highest -> lowest):
+  1. Curated manual override/suppression layer (data/manual_mx.csv)
+  2. Official CDMX Open Data — Fotocívicas (datos.cdmx.gob.mx, Libre Uso MX)
+     with automatic fallback to a committed local snapshot when unreachable.
+  3. OpenStreetMap nationwide Mexico (Overpass API, ODbL 1.0)
+     including speed_camera, maxspeed, traffic_signals, average_speed, and
+     enforcement relations (including man_made=surveillance device nodes).
+
+Secondary enrichment (metadata-only; never inserts standalone points):
+  - CDMX legacy Fotomultas (Ubicaciones) for backfilling missing maxspeed/type <= 25 m.
+  - Batched Overpass nearest-road maxspeed inference (way(around:15)["highway"]["maxspeed"])
+    preferring highest road class (motorway > trunk > primary > secondary > tertiary > residential).
 
 Output format (Garmin-POI / Open-GATSO-POI / Open Zeekr):
   longitude,latitude,"name","comment"
   - No header row, UTF-8 (no BOM), LF line endings, comma delimiter.
-  - Packaged into csv_files.zip -> GATSO_ALL.csv for GitHub Releases, matching
-    borconi/openzeekr (GatsoUpdater.java) and apgneto/br-open-speedcameras.
+  - Packaged into csv_files.zip -> GATSO_ALL.csv AND standalone GATSO_ALL.csv.
 """
 
 from __future__ import annotations
@@ -23,7 +30,6 @@ import json
 import logging
 import math
 import re
-import sys
 import time
 import zipfile
 from collections import Counter
@@ -41,19 +47,24 @@ MX_LAT_MAX = 32.8
 MX_LON_MIN = -118.5
 MX_LON_MAX = -86.5
 
-# CDMX bounding box (for reporting & sanity checks)
+# Key metro/state bounding boxes for reporting & validation
 CDMX_LAT_MIN = 19.04
 CDMX_LAT_MAX = 19.60
 CDMX_LON_MIN = -99.37
 CDMX_LON_MAX = -98.94
 
-USER_AGENT = "mexico-open-streetcameras/1.0 (+https://github.com/danielnzlz01/mexico-open-streetcameras)"
+EDOMEX_LAT_MIN = 18.36
+EDOMEX_LAT_MAX = 20.29
+EDOMEX_LON_MIN = -100.61
+EDOMEX_LON_MAX = -98.59
+
+USER_AGENT = "mexico-open-streetcameras/2.0 (+https://github.com/danielnzlz01/mexico-open-streetcameras)"
 
 OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
     "https://lz4.overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
 ]
 
 # Official CDMX CKAN endpoints for Fotocívicas (Ubicación puntos)
@@ -65,6 +76,13 @@ CDMX_DIRECT_RESOURCE_URLS = [
     "https://datos.cdmx.gob.mx/dataset/f5932908-edbd-4983-bbf0-be482b6b8d80/resource/0af26679-e5fc-4cad-aa7c-7d4884ef6a23/download",
 ]
 
+# Official CDMX CKAN endpoints for legacy Fotomultas (Ubicaciones) — secondary metadata enrichment only
+CDMX_FOTOMULTAS_CKAN_URLS = [
+    "https://datos.cdmx.gob.mx/api/3/action/package_show?id=fotomultas-ubicaciones",
+    "https://datos.cdmx.gob.mx/api/3/action/package_show?id=fotomultas",
+    "https://datos.cdmx.gob.mx/api/3/action/package_search?q=fotomultas",
+]
+
 # Implicit OSM speed limits for Mexico (km/h)
 MX_IMPLICIT_MAXSPEED = {
     "mx:urban": 50,
@@ -74,6 +92,25 @@ MX_IMPLICIT_MAXSPEED = {
     "mx:living_street": 20,
 }
 
+# Road-class hierarchy for nearest-road maxspeed tie-breaking:
+# motorway > trunk > primary > secondary > tertiary > residential
+ROAD_CLASS_PRIORITY: dict[str, int] = {
+    "motorway": 100,
+    "motorway_link": 95,
+    "trunk": 90,
+    "trunk_link": 85,
+    "primary": 80,
+    "primary_link": 75,
+    "secondary": 70,
+    "secondary_link": 65,
+    "tertiary": 60,
+    "tertiary_link": 55,
+    "unclassified": 40,
+    "residential": 30,
+    "living_street": 20,
+    "service": 10,
+}
+
 CARDINAL_TO_DEG = {
     "N": 0, "NNE": 22, "NE": 45, "ENE": 67,
     "E": 90, "ESE": 112, "SE": 135, "SSE": 157,
@@ -81,10 +118,10 @@ CARDINAL_TO_DEG = {
     "W": 270, "WNW": 292, "NW": 315, "NNW": 337,
 }
 
-# Approximate state/region bounding boxes for summary reporting (CDMX checked first)
+# Approximate state/region bounding boxes for summary reporting (CDMX checked before Edomex)
 MX_REGION_BOXES: list[tuple[str, float, float, float, float]] = [
     ("Ciudad de México (CDMX)", CDMX_LAT_MIN, CDMX_LAT_MAX, CDMX_LON_MIN, CDMX_LON_MAX),
-    ("Estado de México", 18.36, 20.29, -100.61, -98.59),
+    ("Estado de México", EDOMEX_LAT_MIN, EDOMEX_LAT_MAX, EDOMEX_LON_MIN, EDOMEX_LON_MAX),
     ("Morelos", 18.33, 19.13, -99.49, -98.63),
     ("Puebla", 17.86, 20.84, -99.07, -96.72),
     ("Tlaxcala", 19.10, 19.73, -98.71, -97.62),
@@ -119,6 +156,13 @@ MX_REGION_BOXES: list[tuple[str, float, float, float, float]] = [
 
 VALID_CAMERA_TYPES = {"fixed_speed", "redlight", "redlight_speed", "average_speed"}
 
+# Merge precedence: manual_mx.csv (3) > CDMX Fotocívicas (2) > OSM (1)
+SOURCE_PRIORITY = {
+    "manual": 3,
+    "cdmx_fotocivicas": 2,
+    "osm": 1,
+}
+
 
 @dataclass
 class CameraPoint:
@@ -132,6 +176,7 @@ class CameraPoint:
     road_name: str = ""
     source: str = "osm"
     osm_id: str = ""
+    priority: int = 1
 
 
 def is_valid_mexico_coord(lat: Any, lon: Any) -> bool:
@@ -159,6 +204,64 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2.0 * earth_radius_m * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
 
 
+def point_to_segment_distance_m(
+    lat: float,
+    lon: float,
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    """Approximate planar distance in meters from (lat, lon) to segment (lat1, lon1)-(lat2, lon2)."""
+    cos_lat = math.cos(math.radians(lat))
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = 111_320.0 * max(0.1, cos_lat)
+
+    ax = (lon1 - lon) * m_per_deg_lon
+    ay = (lat1 - lat) * m_per_deg_lat
+    bx = (lon2 - lon) * m_per_deg_lon
+    by = (lat2 - lat) * m_per_deg_lat
+
+    dx = bx - ax
+    dy = by - ay
+    seg_len_sq = dx * dx + dy * dy
+    if seg_len_sq <= 1e-12:
+        return math.hypot(ax, ay)
+
+    t = max(0.0, min(1.0, -(ax * dx + ay * dy) / seg_len_sq))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return math.hypot(proj_x, proj_y)
+
+
+def point_to_polyline_distance_m(
+    lat: float,
+    lon: float,
+    geometry: list[dict[str, float]],
+) -> float:
+    """Minimum distance in meters from (lat, lon) to an Overpass way geometry list."""
+    if not geometry:
+        return float("inf")
+    if len(geometry) == 1:
+        return haversine_m(lat, lon, float(geometry[0]["lat"]), float(geometry[0]["lon"]))
+
+    best = float("inf")
+    for idx in range(len(geometry) - 1):
+        p1 = geometry[idx]
+        p2 = geometry[idx + 1]
+        d = point_to_segment_distance_m(
+            lat,
+            lon,
+            float(p1["lat"]),
+            float(p1["lon"]),
+            float(p2["lat"]),
+            float(p2["lon"]),
+        )
+        if d < best:
+            best = d
+    return best
+
+
 def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> int:
     """Initial compass bearing in degrees [0, 359] from point 1 to point 2."""
     p1 = math.radians(lat1)
@@ -174,24 +277,24 @@ def parse_maxspeed(raw: Any) -> int | None:
     if raw is None:
         return None
     text = str(raw).strip().lower()
-    if not text or text in {"none", "nan", "null", "signals", "variable", "unknown"}:
+    if not text or text in {"none", "nan", "null", "signals", "variable", "unknown", "walk"}:
         return None
 
     if text in MX_IMPLICIT_MAXSPEED:
         return MX_IMPLICIT_MAXSPEED[text]
 
-    # Handle semicolon-separated multi-lane values (e.g. "50;80" -> pick lowest conservative limit)
+    # Ignore conditional/ambiguous multi-value strings unless simple semicolon numeric limits
     if ";" in text:
         candidates = [parse_maxspeed(part) for part in text.split(";")]
         valid = [c for c in candidates if c is not None]
         return min(valid) if valid else None
 
-    is_mph = "mph" in text
-    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    # Accept strict numeric formats: "50", "50 km/h", "50 kmh", "50 kph", "50 mph"
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*(?:km/?h|kmh|kph|mph)?$", text)
     if not match:
         return None
     val = float(match.group(1))
-    if is_mph:
+    if "mph" in text:
         val = val * 1.60934
     speed = int(round(val))
     if 10 <= speed <= 150:
@@ -211,7 +314,6 @@ def parse_direction(raw: Any) -> int | None:
     if upper in CARDINAL_TO_DEG:
         return CARDINAL_TO_DEG[upper]
 
-    # Spanish CDMX Fotocívicas sentido strings
     sentido_map = {
         "NORTE A SUR": 180,
         "SUR A NORTE": 0,
@@ -223,8 +325,6 @@ def parse_direction(raw: Any) -> int | None:
     if upper in sentido_map:
         return sentido_map[upper]
 
-    # Numeric degrees (avoid treating latitude/longitude floats like 19.473673 as direction
-    # if clearly out of normal integer-bearing style? Wait: 0..360 numeric is valid in OSM).
     m = re.match(r"^(\d+(?:\.\d+)?)$", upper)
     if m:
         val = float(m.group(1))
@@ -233,40 +333,41 @@ def parse_direction(raw: Any) -> int | None:
     return None
 
 
-def build_overpass_query(timeout_sec: int = 90) -> str:
-    """Build Overpass QL query for all traffic enforcement cameras in Mexico."""
-    return f"""
-[out:json][timeout:{timeout_sec}];
-area["ISO3166-1"="MX"]["admin_level"="2"]->.mx;
-(
-  node["highway"="speed_camera"](area.mx);
-  node["enforcement"="maxspeed"](area.mx);
-  node["enforcement"="traffic_signals"](area.mx);
-  node["enforcement"="average_speed"](area.mx);
-  relation["type"="enforcement"]["enforcement"~"^(maxspeed|traffic_signals|average_speed)$"](area.mx);
-  relation["type"="enforcement"][!"enforcement"](area.mx);
-)->.cams;
-(.cams; .cams >;)->.camnodes;
-way(bn.camnodes)["highway"]->.parentways;
-(
-  .cams;
-  .camnodes;
-  .parentways;
-);
-out body;
->;
-out skel qt;
-""".strip()
+def normalize_manual_type(raw: str | None) -> str:
+    """Map manual_mx.csv type values (`speed`, `redlight`, `average_speed`) to internal types."""
+    val = (raw or "").strip().lower()
+    mapping = {
+        "speed": "fixed_speed",
+        "fixed_speed": "fixed_speed",
+        "maxspeed": "fixed_speed",
+        "radar": "fixed_speed",
+        "redlight": "redlight",
+        "red_light": "redlight",
+        "traffic_signals": "redlight",
+        "redlight_speed": "redlight_speed",
+        "average_speed": "average_speed",
+        "average": "average_speed",
+    }
+    return mapping.get(val, "fixed_speed")
 
 
-def fetch_overpass_json(
+_PREFERRED_OVERPASS_MIRROR: str | None = None
+
+
+def _post_overpass_query(
+    ql: str,
     mirrors: list[str] | None = None,
     timeout_sec: int = 90,
     max_rounds: int = 3,
 ) -> dict[str, Any]:
-    """Query Overpass API across mirrors with retry and exponential backoff."""
-    endpoints = mirrors or OVERPASS_MIRRORS
-    ql = build_overpass_query(timeout_sec=timeout_sec)
+    """Execute an Overpass QL query across fallback mirrors with retry/backoff."""
+    global _PREFERRED_OVERPASS_MIRROR
+    base_endpoints = list(mirrors or OVERPASS_MIRRORS)
+    if _PREFERRED_OVERPASS_MIRROR and _PREFERRED_OVERPASS_MIRROR in base_endpoints:
+        endpoints = [_PREFERRED_OVERPASS_MIRROR] + [u for u in base_endpoints if u != _PREFERRED_OVERPASS_MIRROR]
+    else:
+        endpoints = base_endpoints
+
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
 
@@ -278,11 +379,12 @@ def fetch_overpass_json(
                 resp = session.post(
                     url,
                     data={"data": ql},
-                    timeout=(10, timeout_sec + 25),
+                    timeout=(8, timeout_sec + 10),
                 )
                 if resp.status_code == 200:
                     payload = resp.json()
                     if "elements" in payload:
+                        _PREFERRED_OVERPASS_MIRROR = url
                         LOGGER.info(
                             "Overpass mirror %s succeeded (%d elements).",
                             url,
@@ -290,6 +392,8 @@ def fetch_overpass_json(
                         )
                         return payload
                     raise ValueError("Overpass JSON response missing 'elements' key")
+                if resp.status_code == 429:
+                    raise RuntimeError("HTTP 429 Too Many Requests")
                 raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:160].strip()}")
             except Exception as exc:
                 last_err = exc
@@ -303,15 +407,49 @@ def fetch_overpass_json(
     raise RuntimeError(f"All Overpass mirrors failed after {max_rounds} rounds: {last_err}")
 
 
-def _classify_osm_camera_type(node_tags: dict[str, str], rel_tags: dict[str, str]) -> str | None:
+def build_overpass_query(timeout_sec: int = 60) -> str:
+    """Build lean Overpass QL query for all traffic enforcement cameras in Mexico."""
+    return f"""
+[out:json][timeout:{timeout_sec}];
+area["ISO3166-1"="MX"]["admin_level"="2"]->.mx;
+(
+  node["highway"="speed_camera"](area.mx);
+  node["enforcement"="maxspeed"](area.mx);
+  node["enforcement"="traffic_signals"](area.mx);
+  node["enforcement"="average_speed"](area.mx);
+  relation["type"="enforcement"](area.mx);
+);
+out body;
+>;
+out body;
+""".strip()
+
+
+def fetch_overpass_json(
+    mirrors: list[str] | None = None,
+    timeout_sec: int = 60,
+    max_rounds: int = 3,
+) -> dict[str, Any]:
+    """Query Overpass API for Mexico traffic enforcement cameras."""
+    ql = build_overpass_query(timeout_sec=timeout_sec)
+    return _post_overpass_query(ql, mirrors=mirrors, timeout_sec=timeout_sec, max_rounds=max_rounds)
+
+
+def _classify_osm_camera_type(
+    node_tags: dict[str, str],
+    rel_tags: dict[str, str],
+    in_traffic_enforcement_rel: bool = False,
+) -> str | None:
     """Determine normalized camera type from OSM node and parent relation tags."""
     enf_vals = {
         (node_tags.get("enforcement") or "").strip().lower(),
         (rel_tags.get("enforcement") or "").strip().lower(),
     } - {""}
 
-    # Ignore non-traffic surveillance relations/nodes unless explicitly a speed camera
     is_speed_cam_node = (node_tags.get("highway") or "").strip().lower() == "speed_camera"
+    is_surveillance_device = (node_tags.get("man_made") or "").strip().lower() == "surveillance"
+
+    # Exclude pure non-traffic surveillance/toll/weight relations unless explicitly speed_camera
     if enf_vals and enf_vals.issubset({"surveillance", "toll", "access", "weight", "height"}):
         if not is_speed_cam_node:
             return None
@@ -322,11 +460,17 @@ def _classify_osm_camera_type(node_tags: dict[str, str], rel_tags: dict[str, str
 
     if has_avg:
         return "average_speed"
-    if has_redlight and (has_maxspeed and ("maxspeed" in enf_vals or node_tags.get("maxspeed") or rel_tags.get("maxspeed"))):
+    if has_redlight and (
+        "maxspeed" in enf_vals
+        or (is_speed_cam_node and (node_tags.get("maxspeed") or rel_tags.get("maxspeed")))
+    ):
         return "redlight_speed"
     if has_redlight:
         return "redlight"
     if has_maxspeed:
+        return "fixed_speed"
+    # Accept man_made=surveillance device nodes inside a traffic enforcement relation
+    if in_traffic_enforcement_rel and is_surveillance_device:
         return "fixed_speed"
     return None
 
@@ -351,7 +495,7 @@ def extract_osm_cameras(raw: dict[str, Any]) -> list[CameraPoint]:
         elif etype == "relation":
             relations.append(el)
 
-    # Index parent enforcement relations -> device nodes (with inherited tags and heading)
+    # Index parent enforcement relations -> device nodes (with inherited tags & heading)
     rel_info_by_node: dict[int, dict[str, Any]] = {}
     for rel in relations:
         rtags = rel.get("tags", {})
@@ -374,18 +518,29 @@ def extract_osm_cameras(raw: dict[str, Any]) -> list[CameraPoint]:
             elif role == "device":
                 device_ids.append(ref)
 
-        # If untagged relation, keep only device nodes that explicitly carry camera tags
+        # If untagged type=enforcement relation, accept device nodes tagged as speed_camera,
+        # traffic enforcement, OR man_made=surveillance (excluding general town CCTV relations above)
         if not rel_enf:
-            device_ids = [
-                did for did in device_ids
-                if (nodes_by_id.get(did, {}).get("tags", {}).get("highway") == "speed_camera")
-                or (nodes_by_id.get(did, {}).get("tags", {}).get("enforcement") in {"maxspeed", "traffic_signals", "average_speed"})
-            ]
+            filtered_devices: list[int] = []
+            for did in device_ids:
+                dtags = nodes_by_id.get(did, {}).get("tags", {})
+                if (
+                    dtags.get("highway") == "speed_camera"
+                    or dtags.get("enforcement") in {"maxspeed", "traffic_signals", "average_speed"}
+                    or dtags.get("man_made") == "surveillance"
+                ):
+                    filtered_devices.append(did)
+            device_ids = filtered_devices
         elif not device_ids and from_node is not None:
             device_ids = [from_node["id"]]
 
         rel_heading: int | None = None
-        if from_node and to_node and is_valid_mexico_coord(from_node.get("lat"), from_node.get("lon")) and is_valid_mexico_coord(to_node.get("lat"), to_node.get("lon")):
+        if (
+            from_node
+            and to_node
+            and is_valid_mexico_coord(from_node.get("lat"), from_node.get("lon"))
+            and is_valid_mexico_coord(to_node.get("lat"), to_node.get("lon"))
+        ):
             rel_heading = bearing_deg(
                 float(from_node["lat"]),
                 float(from_node["lon"]),
@@ -414,7 +569,11 @@ def extract_osm_cameras(raw: dict[str, Any]) -> list[CameraPoint]:
         if not is_direct_camera and not rinfo:
             continue
 
-        cam_type = _classify_osm_camera_type(ntags, rtags)
+        cam_type = _classify_osm_camera_type(
+            ntags,
+            rtags,
+            in_traffic_enforcement_rel=rinfo is not None,
+        )
         if cam_type is None:
             continue
 
@@ -424,17 +583,25 @@ def extract_osm_cameras(raw: dict[str, Any]) -> list[CameraPoint]:
             continue
 
         # Look up parent highway way (directly or via relation's `from` node)
-        way_anchor = nid
         parent_ways = ways_by_node.get(nid, [])
         if not parent_ways and rinfo and rinfo.get("from_id") is not None:
-            way_anchor = rinfo["from_id"]
-            parent_ways = ways_by_node.get(way_anchor, [])
-        parent_way = parent_ways[0] if parent_ways else None
+            parent_ways = ways_by_node.get(rinfo["from_id"], [])
+
+        # Pick highest road-class parent way if multiple ways share the node
+        parent_way = None
+        if parent_ways:
+            parent_way = max(
+                parent_ways,
+                key=lambda w: (
+                    ROAD_CLASS_PRIORITY.get((w.get("tags", {}).get("highway") or "").lower(), 0),
+                    1 if parse_maxspeed(w.get("tags", {}).get("maxspeed")) is not None else 0,
+                ),
+            )
         wtags = parent_way.get("tags", {}) if parent_way else {}
 
-        # Priority: camera node maxspeed -> relation maxspeed -> parent way maxspeed (for speed cams)
+        # Priority: camera node maxspeed -> relation maxspeed -> parent way maxspeed
         speed = parse_maxspeed(ntags.get("maxspeed")) or parse_maxspeed(rtags.get("maxspeed"))
-        if speed is None and cam_type in {"fixed_speed", "average_speed", "redlight_speed"}:
+        if speed is None:
             speed = parse_maxspeed(wtags.get("maxspeed"))
 
         direction = (
@@ -460,14 +627,128 @@ def extract_osm_cameras(raw: dict[str, Any]) -> list[CameraPoint]:
                 road_name=road_name,
                 source="osm",
                 osm_id=f"node/{nid}",
+                priority=SOURCE_PRIORITY["osm"],
             )
         )
 
     return cameras
 
 
+def select_best_road_maxspeed(
+    cam_lat: float,
+    cam_lon: float,
+    candidate_ways: Iterable[dict[str, Any]],
+    radius_m: float = 15.0,
+) -> tuple[int | None, str]:
+    """
+    Pick the best nearest-road maxspeed from candidate Overpass ways within `radius_m`.
+
+    Tie-breaking order when multiple ways match within `radius_m`:
+      1. Highest road class (motorway > trunk > primary > secondary > tertiary > residential)
+      2. Closest distance in meters to the way geometry
+      3. Conservative (lower) speed limit if class and distance are equal
+    """
+    best_key: tuple[int, float, int] | None = None
+    best_speed: int | None = None
+    best_road_name = ""
+
+    for way in candidate_ways:
+        tags = way.get("tags") or {}
+        speed = parse_maxspeed(tags.get("maxspeed"))
+        if speed is None:
+            continue
+        highway = (tags.get("highway") or "").strip().lower()
+        road_rank = ROAD_CLASS_PRIORITY.get(highway, 0)
+        if road_rank == 0:
+            continue
+
+        geom = way.get("geometry") or []
+        dist_m = point_to_polyline_distance_m(cam_lat, cam_lon, geom)
+        if dist_m > radius_m:
+            continue
+
+        # Maximize road_rank, minimize dist_m, prefer conservative speed on exact tie
+        score = (road_rank, -round(dist_m, 2), -speed)
+        if best_key is None or score > best_key:
+            best_key = score
+            best_speed = speed
+            best_road_name = (tags.get("name") or tags.get("ref") or "").strip()
+
+    return best_speed, best_road_name
+
+
+def enrich_nearest_road_maxspeed(
+    cameras: list[CameraPoint],
+    radius_m: float = 15.0,
+    chunk_size: int = 50,
+    mirrors: list[str] | None = None,
+) -> int:
+    """
+    Batch-query Overpass for surrounding roads (`way(around:15)["highway"]["maxspeed"]`)
+    for all cameras missing a valid numeric speed limit.
+
+    Mutates `cameras` in place and returns the number of cameras enriched.
+    """
+    targets = [c for c in cameras if c.maxspeed_kmh is None]
+    if not targets:
+        return 0
+
+    LOGGER.info(
+        "Running batched nearest-road maxspeed enrichment for %d cameras (chunk_size=%d, radius=%.0fm)...",
+        len(targets),
+        chunk_size,
+        radius_m,
+    )
+
+    enriched = 0
+    # Slight matching tolerance (+1.0m) accounts for Overpass spherical vs local equirectangular rounding
+    match_tolerance_m = radius_m + 1.0
+
+    for start in range(0, len(targets), chunk_size):
+        chunk = targets[start : start + chunk_size]
+        ql_lines = ["[out:json][timeout:35];", "("]
+        for cam in chunk:
+            ql_lines.append(
+                f'  way(around:{int(round(radius_m))},{cam.lat:.6f},{cam.lon:.6f})["highway"]["maxspeed"];'
+            )
+        ql_lines.append(");")
+        ql_lines.append("out body geom;")
+        ql = "\n".join(ql_lines)
+
+        try:
+            payload = _post_overpass_query(ql, mirrors=mirrors, timeout_sec=35, max_rounds=3)
+        except Exception as exc:
+            LOGGER.warning(
+                "Nearest-road maxspeed batch %d..%d failed (%s); skipping chunk.",
+                start,
+                start + len(chunk),
+                exc,
+            )
+            continue
+
+        ways = [el for el in payload.get("elements", []) if el.get("type") == "way" and el.get("geometry")]
+        for cam in chunk:
+            speed, road_name = select_best_road_maxspeed(
+                cam.lat,
+                cam.lon,
+                ways,
+                radius_m=match_tolerance_m,
+            )
+            if speed is not None:
+                cam.maxspeed_kmh = speed
+                if not cam.road_name and road_name:
+                    cam.road_name = road_name
+                enriched += 1
+
+        if start + chunk_size < len(targets):
+            time.sleep(1.5)
+
+    LOGGER.info("Nearest-road maxspeed enrichment filled %d / %d missing limits.", enriched, len(targets))
+    return enriched
+
+
 def _classify_fotocivicas_type(row: dict[str, str]) -> str:
-    """Map CDMX Fotocívicas metadata to normalized camera_type."""
+    """Map CDMX Fotocívicas/Fotomultas metadata to normalized camera_type."""
     explicit_type = " ".join(
         row.get(k, "")
         for k in ("tipo", "tipo_equipo", "tipo_camara", "tipo_dispositivo", "clasificacion", "infraccion")
@@ -487,7 +768,7 @@ def _classify_fotocivicas_type(row: dict[str, str]) -> str:
             return "fixed_speed"
 
     # Official SEMOVI 'Fotocivicas (Ubicación puntos)' schema (ubi, no, via_princi, ubicacion, sentido, y, x):
-    #   ubi 47..99  -> speed radars on expressways & primary corridors (Periférico, AUN, Viaducto, Circuito, etc.)
+    #   ubi 47..99  -> speed radars on expressways & primary corridors
     #   ubi 1..46 & >=100 -> intersection / red-light / confined-lane cameras
     ubi_raw = row.get("ubi", "")
     try:
@@ -500,15 +781,14 @@ def _classify_fotocivicas_type(row: dict[str, str]) -> str:
     if ubi_num > 0:
         return "redlight"
 
-    # Fallback heuristic based on road name if `ubi` is absent
     road_text = f"{row.get('via_princi', '')} {row.get('ubicacion', '')}".lower()
     if any(tok in road_text for tok in ("perif", "viaducto", "autopista urbana", "aun", "circuito bicentenario")):
         return "fixed_speed"
     return "redlight"
 
 
-def _extract_coords_from_fotocivicas_row(row: dict[str, str]) -> tuple[float | None, float | None]:
-    """Extract (lat, lon) from CDMX Fotocívicas CSV row or embedded geo_shape JSON."""
+def _extract_coords_from_cdmx_row(row: dict[str, str]) -> tuple[float | None, float | None]:
+    """Extract (lat, lon) from CDMX open-data CSV row or embedded geo_shape JSON."""
     lat_s = row.get("latitud") or row.get("lat") or row.get("y") or ""
     lon_s = row.get("longitud") or row.get("lon") or row.get("lng") or row.get("x") or ""
 
@@ -538,8 +818,8 @@ def _extract_coords_from_fotocivicas_row(row: dict[str, str]) -> tuple[float | N
     return None, None
 
 
-def parse_fotocivicas_csv(text: str) -> list[CameraPoint]:
-    """Parse CDMX Fotocívicas CSV content into CameraPoint records."""
+def parse_fotocivicas_csv(text: str, source_label: str = "cdmx_fotocivicas") -> list[CameraPoint]:
+    """Parse CDMX Fotocívicas or legacy Fotomultas CSV content into CameraPoint records."""
     cleaned = text.lstrip("\ufeff")
     if not cleaned.strip():
         return []
@@ -552,18 +832,20 @@ def parse_fotocivicas_csv(text: str) -> list[CameraPoint]:
 
     reader = csv.DictReader(io.StringIO(cleaned), dialect=dialect)
     cameras: list[CameraPoint] = []
+    priority = SOURCE_PRIORITY.get(source_label, 1)
+
     for raw_row in reader:
         row = {
             (k or "").strip().lower(): (v or "").strip()
             for k, v in raw_row.items()
             if k is not None
         }
-        lat, lon = _extract_coords_from_fotocivicas_row(row)
+        lat, lon = _extract_coords_from_cdmx_row(row)
         if not is_valid_mexico_coord(lat, lon):
             continue
 
-        # Handle known shifted-column anomaly in official CDMX file (ubi=46: via_princi holds sentido)
-        via = row.get("via_princi") or row.get("vialidad") or ""
+        # Handle known shifted-column anomaly in official CDMX file (ubi=46)
+        via = row.get("via_princi") or row.get("vialidad") or row.get("calle") or ""
         ubic = row.get("ubicacion") or ""
         sentido = row.get("sentido") or row.get("direccion") or ""
         if parse_direction(via) is not None and parse_direction(sentido) is None:
@@ -575,6 +857,7 @@ def parse_fotocivicas_csv(text: str) -> list[CameraPoint]:
             row.get("maxspeed_kmh")
             or row.get("velocidad")
             or row.get("limite_velocidad")
+            or row.get("limite")
             or row.get("maxspeed")
         )
         direction = parse_direction(sentido)
@@ -588,16 +871,22 @@ def parse_fotocivicas_csv(text: str) -> list[CameraPoint]:
                 maxspeed_kmh=speed,
                 direction_deg=direction,
                 road_name=road_name,
-                source="cdmx_fotocivicas",
+                source=source_label,
                 osm_id="",
+                priority=priority,
             )
         )
     return cameras
 
 
-def parse_fotocivicas_geojson(payload: dict[str, Any]) -> list[CameraPoint]:
-    """Parse CDMX Fotocívicas GeoJSON FeatureCollection into CameraPoint records."""
+def parse_fotocivicas_geojson(
+    payload: dict[str, Any],
+    source_label: str = "cdmx_fotocivicas",
+) -> list[CameraPoint]:
+    """Parse CDMX Fotocívicas or legacy Fotomultas GeoJSON into CameraPoint records."""
     cameras: list[CameraPoint] = []
+    priority = SOURCE_PRIORITY.get(source_label, 1)
+
     for feat in payload.get("features", []):
         geom = feat.get("geometry") or {}
         if geom.get("type") != "Point":
@@ -612,11 +901,12 @@ def parse_fotocivicas_geojson(payload: dict[str, Any]) -> list[CameraPoint]:
             str(k).strip().lower(): "" if v is None else str(v).strip()
             for k, v in (feat.get("properties") or {}).items()
         }
-        road_name = (props.get("ubicacion") or props.get("via_princi") or "").strip()
+        road_name = (props.get("ubicacion") or props.get("via_princi") or props.get("vialidad") or "").strip()
         speed = parse_maxspeed(
             props.get("maxspeed_kmh")
             or props.get("velocidad")
             or props.get("limite_velocidad")
+            or props.get("limite")
             or props.get("maxspeed")
         )
         direction = parse_direction(props.get("sentido") or props.get("direccion"))
@@ -629,87 +919,96 @@ def parse_fotocivicas_geojson(payload: dict[str, Any]) -> list[CameraPoint]:
                 maxspeed_kmh=speed,
                 direction_deg=direction,
                 road_name=road_name,
-                source="cdmx_fotocivicas",
+                source=source_label,
                 osm_id="",
+                priority=priority,
             )
         )
     return cameras
+
+
+def _discover_ckan_resources(session: requests.Session, api_urls: list[str]) -> list[tuple[str, str]]:
+    """Discover CSV/GeoJSON resource URLs from CDMX CKAN package_show / package_search endpoints."""
+    candidate_urls: list[tuple[str, str]] = []
+    for api_url in api_urls:
+        try:
+            resp = session.get(api_url, timeout=(8, 15))
+            if resp.status_code != 200:
+                continue
+            result = resp.json().get("result") or {}
+            packages = result.get("results") if isinstance(result.get("results"), list) else [result]
+            for pkg in packages:
+                for res in pkg.get("resources", []):
+                    fmt = (res.get("format") or "").strip().lower()
+                    url = (res.get("url") or "").strip()
+                    name = (res.get("name") or "").lower()
+                    if url and fmt in {"csv", "geojson", "json"}:
+                        entry = (url, fmt)
+                        if entry not in candidate_urls:
+                            if "ubicaci" in name or "punto" in name or "fotocivic" in name or "fotomulta" in name:
+                                candidate_urls.insert(0, entry)
+                            else:
+                                candidate_urls.append(entry)
+        except Exception as exc:
+            LOGGER.warning("CDMX CKAN metadata lookup failed (%s): %s", api_url, exc)
+    return candidate_urls
+
+
+def _download_cdmx_resources(
+    session: requests.Session,
+    candidate_urls: list[tuple[str, str]],
+    source_label: str,
+) -> list[CameraPoint]:
+    """Download and parse the first valid CSV/GeoJSON resource from CDMX open data."""
+    for url, fmt in candidate_urls:
+        try:
+            LOGGER.info("Fetching %s resource: %s", source_label, url)
+            resp = session.get(url, timeout=(8, 25))
+            resp.raise_for_status()
+            content_type = (resp.headers.get("Content-Type") or "").lower()
+            if fmt in {"geojson", "json"} or "json" in content_type:
+                cameras = parse_fotocivicas_geojson(resp.json(), source_label=source_label)
+            else:
+                try:
+                    text = resp.content.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    text = resp.content.decode("latin-1")
+                cameras = parse_fotocivicas_csv(text, source_label=source_label)
+            if cameras:
+                LOGGER.info("Loaded %d %s points live from %s", len(cameras), source_label, url)
+                return cameras
+            LOGGER.warning("CDMX resource %s returned 0 valid camera points", url)
+        except Exception as exc:
+            LOGGER.warning("Failed to download %s resource %s: %s", source_label, url, exc)
+    return []
 
 
 def fetch_cdmx_fotocivicas(
     cache_path: Path | None = None,
     skip_live: bool = False,
 ) -> tuple[list[CameraPoint], str]:
-    """
-    Fetch official CDMX Fotocívicas points from datos.cdmx.gob.mx.
-
-    Returns (cameras, status_label) where status_label is one of:
-      - "live" (fetched directly from datos.cdmx.gob.mx)
-      - "cache" (fell back cleanly to local cached CSV after warning)
-      - "unavailable" (portal unreachable and no cache available)
-    """
+    """Fetch official CDMX Fotocívicas points with graceful local-cache fallback."""
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
 
     if not skip_live:
-        candidate_urls: list[tuple[str, str]] = []  # (url, format_hint)
-
-        # 1. Discover live resource URLs via CKAN API
-        for api_url in CDMX_CKAN_PACKAGE_URLS:
-            try:
-                resp = session.get(api_url, timeout=(8, 15))
-                if resp.status_code == 200:
-                    data = resp.json()
-                    resources = data.get("result", {}).get("resources", [])
-                    for res in resources:
-                        fmt = (res.get("format") or "").strip().lower()
-                        url = (res.get("url") or "").strip()
-                        name = (res.get("name") or "").lower()
-                        if url and fmt in {"csv", "geojson", "json"}:
-                            # Prefer location / ubicacion resources first
-                            if "ubicaci" in name or "punto" in name or "fotocivic" in name:
-                                candidate_urls.insert(0, (url, fmt))
-                            else:
-                                candidate_urls.append((url, fmt))
-            except Exception as exc:
-                LOGGER.warning("CDMX CKAN metadata lookup failed (%s): %s", api_url, exc)
-
-        # 2. Always include known direct CSV resource URL as fallback
+        candidate_urls = _discover_ckan_resources(session, CDMX_CKAN_PACKAGE_URLS)
         for direct_url in CDMX_DIRECT_RESOURCE_URLS:
             if all(u != direct_url for u, _ in candidate_urls):
                 candidate_urls.append((direct_url, "csv"))
 
-        # 3. Try downloading from discovered/direct URLs
-        for url, fmt in candidate_urls:
-            try:
-                LOGGER.info("Fetching CDMX Fotocívicas resource: %s", url)
-                resp = session.get(url, timeout=(8, 25))
-                resp.raise_for_status()
-                content_type = (resp.headers.get("Content-Type") or "").lower()
-                if fmt in {"geojson", "json"} or "json" in content_type:
-                    cameras = parse_fotocivicas_geojson(resp.json())
-                else:
-                    # Decode UTF-8 with latin-1 fallback for older government CSV exports
-                    try:
-                        text = resp.content.decode("utf-8-sig")
-                    except UnicodeDecodeError:
-                        text = resp.content.decode("latin-1")
-                    cameras = parse_fotocivicas_csv(text)
-                if cameras:
-                    LOGGER.info("Loaded %d CDMX Fotocívicas points live from %s", len(cameras), url)
-                    return cameras, "live"
-                LOGGER.warning("CDMX resource %s returned 0 valid camera points", url)
-            except Exception as exc:
-                LOGGER.warning("Failed to download CDMX Fotocívicas resource %s: %s", url, exc)
+        live_cams = _download_cdmx_resources(session, candidate_urls, source_label="cdmx_fotocivicas")
+        if live_cams:
+            return live_cams, "live"
 
         LOGGER.warning(
-            "CDMX open data portal (datos.cdmx.gob.mx) is unreachable or returned no data; "
+            "CDMX open data portal (datos.cdmx.gob.mx) is unreachable or returned no Fotocívicas data; "
             "falling back to local cache if present."
         )
 
     if cache_path and cache_path.exists():
         text = cache_path.read_text(encoding="utf-8-sig")
-        cameras = parse_fotocivicas_csv(text)
+        cameras = parse_fotocivicas_csv(text, source_label="cdmx_fotocivicas")
         LOGGER.warning(
             "Using local cached CDMX Fotocívicas dataset (%s): %d points.",
             cache_path,
@@ -721,24 +1020,160 @@ def fetch_cdmx_fotocivicas(
     return [], "unavailable"
 
 
-def _merge_camera_types(t1: str, t2: str) -> str:
-    """Combine two camera types preserving the richest enforcement semantics."""
-    if t1 == t2:
-        return t1
-    pair = {t1, t2}
-    if "average_speed" in pair:
-        return "average_speed"
-    if "redlight_speed" in pair or pair == {"fixed_speed", "redlight"}:
-        return "redlight_speed"
-    return t1
+def fetch_cdmx_fotomultas(skip_live: bool = False) -> tuple[list[CameraPoint], str]:
+    """
+    Optionally fetch legacy CDMX Fotomultas (Ubicaciones) strictly for secondary metadata
+    enrichment. Never fails the build if the portal is unreachable.
+    """
+    if skip_live:
+        return [], "skipped"
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT})
+    candidate_urls = _discover_ckan_resources(session, CDMX_FOTOMULTAS_CKAN_URLS)
+    if not candidate_urls:
+        LOGGER.warning("CDMX legacy Fotomultas portal unavailable; skipping secondary metadata enrichment.")
+        return [], "unavailable"
+
+    records = _download_cdmx_resources(session, candidate_urls, source_label="cdmx_fotomultas")
+    if records:
+        return records, "live"
+
+    LOGGER.warning("CDMX legacy Fotomultas dataset unavailable; skipping secondary metadata enrichment.")
+    return [], "unavailable"
 
 
-def _metadata_richness(cam: CameraPoint) -> tuple[int, int, int, int, int]:
-    """Higher tuple means richer metadata (preferred as cluster anchor)."""
+def enrich_with_fotomultas(
+    cameras: list[CameraPoint],
+    fotomultas_records: list[CameraPoint],
+    radius_m: float = 25.0,
+) -> int:
+    """
+    Secondary metadata-only enrichment using legacy CDMX Fotomultas records.
+
+    - NEVER inserts standalone Fotomultas points into `cameras`.
+    - Only backfills missing `maxspeed_kmh`, direction, road_name, or upgrades combined
+      type on existing non-manual OSM/Fotocívicas points within `<= radius_m` meters.
+    """
+    if not fotomultas_records:
+        return 0
+
+    enriched = 0
+    for cam in cameras:
+        # Never overwrite curated manual entries
+        if cam.priority >= SOURCE_PRIORITY["manual"]:
+            continue
+
+        nearest: CameraPoint | None = None
+        nearest_dist = radius_m + 1.0
+        for legacy in fotomultas_records:
+            dist = haversine_m(cam.lat, cam.lon, legacy.lat, legacy.lon)
+            if dist <= radius_m and dist < nearest_dist:
+                nearest = legacy
+                nearest_dist = dist
+
+        if nearest is None:
+            continue
+
+        updated = False
+        if cam.maxspeed_kmh is None and nearest.maxspeed_kmh is not None:
+            cam.maxspeed_kmh = nearest.maxspeed_kmh
+            updated = True
+        if cam.direction_deg is None and nearest.direction_deg is not None:
+            cam.direction_deg = nearest.direction_deg
+            updated = True
+        if not cam.road_name and nearest.road_name:
+            cam.road_name = nearest.road_name
+            updated = True
+        # Upgrade pure redlight <-> fixed_speed to redlight_speed if legacy confirms dual enforcement
+        if {cam.camera_type, nearest.camera_type} == {"fixed_speed", "redlight"} or (
+            nearest.camera_type == "redlight_speed" and cam.camera_type in {"fixed_speed", "redlight"}
+        ):
+            cam.camera_type = "redlight_speed"
+            updated = True
+
+        if updated:
+            enriched += 1
+
+    LOGGER.info("Secondary Fotomultas metadata enrichment updated %d existing cameras.", enriched)
+    return enriched
+
+
+def load_manual_overrides(
+    path: Path | None,
+) -> tuple[list[CameraPoint], list[tuple[float, float, str]]]:
+    """
+    Load curated manual additions, overrides, and suppressions from `data/manual_mx.csv`.
+
+    Expected schema:
+      lat,lon,type,maxspeed,direction,active,source,notes
+
+    Returns:
+      (active_cameras, suppressions)
+      where `suppressions` is a list of `(lat, lon, notes)` entries with `active=false`.
+    """
+    if path is None or not path.exists():
+        return [], []
+
+    active_cameras: list[CameraPoint] = []
+    suppressions: list[tuple[float, float, str]] = []
+
+    text = path.read_text(encoding="utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    for raw_row in reader:
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw_row.items() if k is not None}
+        lat_s = row.get("lat", "")
+        lon_s = row.get("lon", "")
+        if not lat_s or not lon_s:
+            continue
+        if not is_valid_mexico_coord(lat_s, lon_s):
+            LOGGER.warning("Skipping manual_mx.csv row with invalid Mexico coordinates: %s, %s", lat_s, lon_s)
+            continue
+
+        lat = round(float(lat_s), 6)
+        lon = round(float(lon_s), 6)
+        active_raw = (row.get("active") or "true").strip().lower()
+        is_active = active_raw not in {"false", "0", "no", "off"}
+
+        notes = row.get("notes", "")
+        if not is_active:
+            suppressions.append((lat, lon, notes))
+            continue
+
+        cam_type = normalize_manual_type(row.get("type"))
+        speed = parse_maxspeed(row.get("maxspeed"))
+        direction = parse_direction(row.get("direction"))
+        src_note = row.get("source") or "manual"
+        source_label = "manual" if src_note.lower() == "manual" else f"manual:{src_note}"
+
+        active_cameras.append(
+            CameraPoint(
+                lat=lat,
+                lon=lon,
+                camera_type=cam_type,
+                maxspeed_kmh=speed,
+                direction_deg=direction,
+                road_name=notes,
+                source=source_label,
+                osm_id="",
+                priority=SOURCE_PRIORITY["manual"],
+            )
+        )
+
+    if active_cameras or suppressions:
+        LOGGER.info(
+            "Loaded manual_mx.csv: %d active override(s), %d suppression rule(s).",
+            len(active_cameras),
+            len(suppressions),
+        )
+    return active_cameras, suppressions
+
+
+def _metadata_richness(cam: CameraPoint) -> tuple[int, int, int, int]:
+    """Secondary richness key used within the same source priority tier."""
     return (
         1 if cam.maxspeed_kmh is not None else 0,
         1 if cam.camera_type in {"redlight_speed", "average_speed"} else 0,
-        1 if cam.source == "osm" else 0,
         1 if cam.direction_deg is not None else 0,
         1 if bool(cam.road_name) else 0,
     )
@@ -747,30 +1182,53 @@ def _metadata_richness(cam: CameraPoint) -> tuple[int, int, int, int, int]:
 def deduplicate_cameras(
     cameras: Iterable[CameraPoint],
     radius_m: float = 25.0,
+    suppressions: Iterable[tuple[float, float, str]] = (),
 ) -> list[CameraPoint]:
     """
-    Deduplicate camera points within `radius_m` meters using Haversine distance.
+    Apply suppression rules and deduplicate camera points within `radius_m` meters.
 
-    When merging duplicates, preserves the richest metadata (known maxspeed,
-    combined camera type, heading, road name, and merged source attribution).
-    Guarantees every pair of returned points is strictly > `radius_m` meters apart.
+    Precedence order:
+      1. `data/manual_mx.csv` (priority=3)
+      2. CDMX Fotocívicas (priority=2)
+      3. OpenStreetMap (priority=1)
+
+    - Any non-manual point within `<= radius_m` of an `active=false` suppression rule is dropped.
+    - When merging duplicates within `<= radius_m`, the higher-priority record wins on coordinates,
+      `camera_type`, and explicit `maxspeed_kmh`; missing optional fields are backfilled from the
+      lower-priority record.
+    - Guarantees every pair of returned points is strictly > `radius_m` meters apart.
     """
-    # Filter invalid coordinates and process richest points first deterministically
-    valid = [c for c in cameras if is_valid_mexico_coord(c.lat, c.lon)]
+    suppression_list = list(suppressions)
+
+    # 1. Validate Mexico bounds and apply `active=false` suppression rules to non-manual sources
+    valid: list[CameraPoint] = []
+    suppressed_count = 0
+    for cam in cameras:
+        if not is_valid_mexico_coord(cam.lat, cam.lon):
+            continue
+        if cam.priority < SOURCE_PRIORITY["manual"] and suppression_list:
+            if any(haversine_m(cam.lat, cam.lon, slat, slon) <= radius_m for slat, slon, _ in suppression_list):
+                suppressed_count += 1
+                continue
+        valid.append(cam)
+
+    if suppressed_count:
+        LOGGER.info("Suppressed %d camera(s) via manual_mx.csv active=false rules.", suppressed_count)
+
+    # 2. Sort strictly by descending source priority, then metadata richness, then coordinates
     valid.sort(
         key=lambda c: (
+            -c.priority,
             -_metadata_richness(c)[0],
             -_metadata_richness(c)[1],
             -_metadata_richness(c)[2],
             -_metadata_richness(c)[3],
-            -_metadata_richness(c)[4],
             c.lat,
             c.lon,
             c.camera_type,
         )
     )
 
-    # Spatial grid cell size (~0.0005 deg ≈ 55m > 25m) guarantees checking 3x3 neighbors finds all pairs <= 25m
     cell_deg = max(0.0005, (radius_m / 111_000.0) * 1.5)
     grid: dict[tuple[int, int], list[CameraPoint]] = {}
     kept: list[CameraPoint] = []
@@ -790,10 +1248,18 @@ def deduplicate_cameras(
                         nearest_dist = dist
 
         if nearest is not None:
-            # Merge richer metadata into existing kept record
+            # Higher-priority `nearest` anchors coordinates, camera_type, and explicit maxspeed.
+            # Backfill missing fields from the merged duplicate.
             if nearest.maxspeed_kmh is None and cam.maxspeed_kmh is not None:
                 nearest.maxspeed_kmh = cam.maxspeed_kmh
-            nearest.camera_type = _merge_camera_types(nearest.camera_type, cam.camera_type)
+            # Only combine types when both records come from the SAME priority tier;
+            # higher-priority records (manual > Fotocívicas > OSM) strictly override lower-priority types.
+            if nearest.priority == cam.priority and nearest.camera_type != cam.camera_type:
+                pair = {nearest.camera_type, cam.camera_type}
+                if "average_speed" in pair:
+                    nearest.camera_type = "average_speed"
+                elif "redlight_speed" in pair or pair == {"fixed_speed", "redlight"}:
+                    nearest.camera_type = "redlight_speed"
             if nearest.direction_deg is None and cam.direction_deg is not None:
                 nearest.direction_deg = cam.direction_deg
             if not nearest.road_name and cam.road_name:
@@ -814,11 +1280,11 @@ def deduplicate_cameras(
             road_name=cam.road_name,
             source=cam.source,
             osm_id=cam.osm_id,
+            priority=cam.priority,
         )
         kept.append(cloned)
         grid.setdefault((gx, gy), []).append(cloned)
 
-    # Deterministic sort for minimal git diffs across weekly updates
     kept.sort(key=lambda c: (c.lat, c.lon, c.camera_type, c.maxspeed_kmh or 0))
     return kept
 
@@ -835,7 +1301,7 @@ def format_gatso_fields(cam: CameraPoint) -> tuple[str, str]:
     if cam.camera_type == "average_speed":
         name = f"average @{speed}" if speed is not None else "average"
     elif cam.camera_type == "redlight":
-        name = f"max @{speed}" if speed is not None else "stop"
+        name = f"stop @{speed}" if speed is not None else "stop"
     elif cam.camera_type == "redlight_speed":
         name = f"max @{speed}" if speed is not None else "stop"
     else:
@@ -919,9 +1385,16 @@ def build_summary(
     osm_raw_count: int,
     cdmx_raw_count: int,
     cdmx_status: str,
+    manual_active_count: int,
+    manual_suppression_count: int,
+    fotomultas_enriched: int,
+    fotomultas_status: str,
+    with_speed_before_road: int,
+    nearest_road_enriched: int,
     final_cameras: list[CameraPoint],
 ) -> dict[str, Any]:
     """Compute structured build metrics for logging and CI summaries."""
+    total = len(final_cameras)
     by_type = Counter(c.camera_type for c in final_cameras)
     by_source = Counter(c.source for c in final_cameras)
     by_region = Counter(infer_region(c.lat, c.lon) for c in final_cameras)
@@ -931,13 +1404,23 @@ def build_summary(
         for c in final_cameras
         if CDMX_LAT_MIN <= c.lat <= CDMX_LAT_MAX and CDMX_LON_MIN <= c.lon <= CDMX_LON_MAX
     )
+    edomex_count = by_region.get("Estado de México", 0)
     return {
         "osm_extracted": osm_raw_count,
         "cdmx_fotocivicas_extracted": cdmx_raw_count,
         "cdmx_fotocivicas_status": cdmx_status,
-        "final_deduplicated_count": len(final_cameras),
+        "manual_active_count": manual_active_count,
+        "manual_suppression_count": manual_suppression_count,
+        "fotomultas_enriched": fotomultas_enriched,
+        "fotomultas_status": fotomultas_status,
+        "with_known_maxspeed_before_nearest_road": with_speed_before_road,
+        "known_maxspeed_pct_before_nearest_road": round(100.0 * with_speed_before_road / total, 1) if total else 0.0,
+        "nearest_road_enriched": nearest_road_enriched,
+        "final_deduplicated_count": total,
         "with_known_maxspeed": with_speed,
+        "known_maxspeed_pct": round(100.0 * with_speed / total, 1) if total else 0.0,
         "cdmx_bbox_count": cdmx_bbox_count,
+        "edomex_count": edomex_count,
         "by_type": dict(by_type.most_common()),
         "by_source": dict(by_source.most_common()),
         "top_regions": by_region.most_common(12),
@@ -952,15 +1435,31 @@ def print_summary(summary: dict[str, Any]) -> None:
         f"  CDMX Fotocívicas extracted    : {summary['cdmx_fotocivicas_extracted']} "
         f"(status: {summary['cdmx_fotocivicas_status']})"
     )
+    print(
+        f"  Manual overrides (manual_mx)  : {summary['manual_active_count']} active, "
+        f"{summary['manual_suppression_count']} suppression(s)"
+    )
+    print(
+        f"  CDMX Fotomultas backfill      : {summary['fotomultas_enriched']} matched "
+        f"(status: {summary['fotomultas_status']})"
+    )
     print(f"  Final deduplicated count      : {summary['final_deduplicated_count']}")
-    print(f"  Points with known maxspeed    : {summary['with_known_maxspeed']}")
-    print(f"  Points inside CDMX bbox       : {summary['cdmx_bbox_count']}")
+    print(
+        f"  Known maxspeed (before road)  : {summary['with_known_maxspeed_before_nearest_road']} "
+        f"({summary['known_maxspeed_pct_before_nearest_road']:.1f}%)"
+    )
+    print(f"  Nearest-road maxspeed added   : +{summary['nearest_road_enriched']}")
+    print(
+        f"  Known maxspeed (after road)   : {summary['with_known_maxspeed']} "
+        f"({summary['known_maxspeed_pct']:.1f}%)"
+    )
+    print(f"  CDMX bbox / Edomex count      : {summary['cdmx_bbox_count']} / {summary['edomex_count']}")
     print("  Breakdown by camera type:")
     for ctype, cnt in summary["by_type"].items():
         print(f"    - {ctype:<16}: {cnt}")
     print("  Breakdown by merged source:")
     for src, cnt in summary["by_source"].items():
-        print(f"    - {src:<24}: {cnt}")
+        print(f"    - {src:<26}: {cnt}")
     print("  Top states / regions (approx. bbox):")
     for region, cnt in summary["top_regions"]:
         print(f"    - {region:<26}: {cnt}")
@@ -990,15 +1489,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Fallback local CDMX Fotocívicas CSV cache",
     )
     parser.add_argument(
+        "--manual-csv",
+        type=Path,
+        default=repo_root / "data" / "manual_mx.csv",
+        help="Curated manual override & suppression CSV",
+    )
+    parser.add_argument(
         "--skip-live-cdmx",
         action="store_true",
-        help="Skip live datos.cdmx.gob.mx request and use the local cache directly",
+        help="Skip live datos.cdmx.gob.mx requests and use the local cache directly",
+    )
+    parser.add_argument(
+        "--skip-nearest-road",
+        action="store_true",
+        help="Skip batched Overpass nearest-road maxspeed inference",
     )
     parser.add_argument(
         "--dedupe-radius-m",
         type=float,
         default=25.0,
-        help="Haversine deduplication radius in meters (default: 25.0)",
+        help="Haversine deduplication & suppression radius in meters (default: 25.0)",
     )
     parser.add_argument(
         "--summary-json",
@@ -1014,26 +1524,46 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    # Source A: OpenStreetMap nationwide Mexico
+    # 1. Source A: OpenStreetMap nationwide Mexico
     osm_raw = fetch_overpass_json()
     osm_cameras = extract_osm_cameras(osm_raw)
     LOGGER.info("Extracted %d valid camera points from OpenStreetMap.", len(osm_cameras))
 
-    # Source B: CDMX Fotocívicas (with resilient cache fallback)
+    # 2. Source B: Official CDMX Fotocívicas (with resilient cache fallback)
     cdmx_cameras, cdmx_status = fetch_cdmx_fotocivicas(
         cache_path=args.cdmx_cache,
         skip_live=args.skip_live_cdmx,
     )
 
-    # Merge & deduplicate
-    combined = osm_cameras + cdmx_cameras
-    deduped = deduplicate_cameras(combined, radius_m=args.dedupe_radius_m)
+    # 3. Curated Manual Override & Suppression Layer
+    manual_active, manual_suppressions = load_manual_overrides(args.manual_csv)
 
-    # Emit primary GATSO_ALL.csv
+    # 4. Merge & deduplicate with strict precedence: manual > CDMX Fotocívicas > OSM
+    combined = manual_active + cdmx_cameras + osm_cameras
+    deduped = deduplicate_cameras(
+        combined,
+        radius_m=args.dedupe_radius_m,
+        suppressions=manual_suppressions,
+    )
+
+    # 5. Secondary metadata-only enrichment via CDMX legacy Fotomultas (never adds rows)
+    fotomultas_records, fotomultas_status = fetch_cdmx_fotomultas(skip_live=args.skip_live_cdmx)
+    fotomultas_enriched = enrich_with_fotomultas(deduped, fotomultas_records, radius_m=args.dedupe_radius_m)
+
+    # 6. Batched nearest-road maxspeed inference via Overpass way(around:15)
+    with_speed_before_road = sum(1 for c in deduped if c.maxspeed_kmh is not None)
+    nearest_road_enriched = 0
+    if not args.skip_nearest_road:
+        nearest_road_enriched = enrich_nearest_road_maxspeed(deduped, radius_m=15.0, chunk_size=50)
+
+    # Re-sort deterministically after enrichment (maxspeed is part of the tie-break sort key)
+    deduped.sort(key=lambda c: (c.lat, c.lon, c.camera_type, c.maxspeed_kmh or 0))
+
+    # 7. Emit primary GATSO_ALL.csv
     written = write_gatso_csv(deduped, args.output)
     LOGGER.info("Wrote %d rows to %s", written, args.output)
 
-    # Optionally emit release bundle (dist/csv_files.zip + mx_speed_cameras.csv + GATSO_ALL.csv)
+    # 8. Optionally emit release bundle (dist/csv_files.zip + mx_speed_cameras.csv + GATSO_ALL.csv)
     if args.dist_dir is not None:
         args.dist_dir.mkdir(parents=True, exist_ok=True)
         dist_gatso = args.dist_dir / "GATSO_ALL.csv"
@@ -1054,6 +1584,12 @@ def main(argv: list[str] | None = None) -> int:
         osm_raw_count=len(osm_cameras),
         cdmx_raw_count=len(cdmx_cameras),
         cdmx_status=cdmx_status,
+        manual_active_count=len(manual_active),
+        manual_suppression_count=len(manual_suppressions),
+        fotomultas_enriched=fotomultas_enriched,
+        fotomultas_status=fotomultas_status,
+        with_speed_before_road=with_speed_before_road,
+        nearest_road_enriched=nearest_road_enriched,
         final_cameras=deduped,
     )
     print_summary(summary)

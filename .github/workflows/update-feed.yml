@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -44,7 +46,7 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit updated GATSO_ALL.csv to main
+      - name: Publish to main branch root (GATSO_ALL.csv)
         if: steps.diff.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
@@ -52,49 +54,51 @@ jobs:
           git add GATSO_ALL.csv
           COUNT=$(wc -l < GATSO_ALL.csv | tr -d ' ')
           git commit -m "chore(feed): update GATSO_ALL.csv (${COUNT} cameras)"
-          git push
+          git push origin HEAD:main
 
-      - name: Check whether an initial release exists
-        id: release_check
+      - name: Publish to latest GitHub Release (GATSO_ALL.csv & csv_files.zip)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view >/dev/null 2>&1; then
-            echo "has_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_release=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish GitHub Release (csv_files.zip for Open Zeekr)
-        if: >-
-          steps.diff.outputs.changed == 'true' ||
-          steps.release_check.outputs.has_release == 'false' ||
-          github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="v$(date -u +%Y%m%d)-${{ github.run_number }}"
           COUNT=$(wc -l < GATSO_ALL.csv | tr -d ' ')
+          LATEST_TAG=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
           NOTES=$(python - <<'PY'
           import json
           from pathlib import Path
           s = json.loads(Path("dist/summary.json").read_text(encoding="utf-8"))
           lines = [
-              "Automated Mexico speed & red-light camera dataset for **Open Zeekr** (`csv_files.zip` -> `GATSO_ALL.csv`).",
+              "Automated Mexico speed & red-light camera dataset for **Open Zeekr** (`csv_files.zip` -> `GATSO_ALL.csv` and direct `GATSO_ALL.csv`).",
               "",
               f"- **Total deduplicated cameras:** {s['final_deduplicated_count']}",
               f"- **OpenStreetMap extracted:** {s['osm_extracted']} (ODbL 1.0)",
               f"- **CDMX Fotocívicas extracted:** {s['cdmx_fotocivicas_extracted']} (status: `{s['cdmx_fotocivicas_status']}`)",
-              f"- **With known speed limit:** {s['with_known_maxspeed']}",
-              f"- **Inside CDMX:** {s['cdmx_bbox_count']}",
+              f"- **CDMX Fotomultas metadata matches:** {s.get('fotomultas_enriched', 0)} (status: `{s.get('fotomultas_status', 'n/a')}`)",
+              f"- **Nearest-road maxspeed inferred:** {s.get('nearest_road_enriched', 0)}",
+              f"- **With known speed limit:** {s['with_known_maxspeed']} ({s.get('known_maxspeed_pct', 0):.1f}%)",
+              f"- **Inside CDMX:** {s['cdmx_bbox_count']} | **Edomex:** {s.get('edomex_count', 0)}",
               "",
-              "`csv_files.zip` contains `GATSO_ALL.csv`, `mx_speed_cameras.csv`, and `ATTRIBUTION.md`.",
+              "Assets attached: `GATSO_ALL.csv`, `csv_files.zip` (containing `GATSO_ALL.csv`, `mx_speed_cameras.csv`, `ATTRIBUTION.md`), and `mx_speed_cameras.csv`.",
           ]
           print("\n".join(lines))
           PY
           )
-          gh release create "$TAG" \
-            dist/csv_files.zip \
-            dist/GATSO_ALL.csv \
-            --title "Mexico Speed Cameras (${COUNT} points, #${{ github.run_number }})" \
-            --notes "$NOTES"
+
+          if [ -z "$LATEST_TAG" ] || [ "${{ steps.diff.outputs.changed }}" = "true" ]; then
+            TAG="v$(date -u +%Y%m%d)-${{ github.run_number }}"
+            gh release create "$TAG" \
+              dist/GATSO_ALL.csv \
+              dist/csv_files.zip \
+              dist/mx_speed_cameras.csv \
+              --latest \
+              --title "Mexico Speed Cameras (${COUNT} points, #${{ github.run_number }})" \
+              --notes "$NOTES"
+          else
+            # Replace assets in place on the latest release so releases/latest/download/GATSO_ALL.csv
+            # and csv_files.zip always stay fresh and resolve with HTTP 200 on every run.
+            gh release upload "$LATEST_TAG" \
+              dist/GATSO_ALL.csv \
+              dist/csv_files.zip \
+              dist/mx_speed_cameras.csv \
+              --clobber
+            gh release edit "$LATEST_TAG" --notes "$NOTES"
+          fi

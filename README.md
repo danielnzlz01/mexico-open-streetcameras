@@ -14,44 +14,69 @@ Open Zeekr pulls camera feeds from GitHub Releases (`releases/latest` → `csv_f
    ```
 4. Tap **Add**. On the next sync, Open Zeekr downloads the latest release's `csv_files.zip`, extracts `GATSO_ALL.csv`, and merges Mexico's cameras with your other enabled sources.
 
-## Data Sources
+Direct download URLs (updated on every scheduled and manual run):
+- `https://github.com/danielnzlz01/mexico-open-streetcameras/releases/latest/download/csv_files.zip`
+- `https://github.com/danielnzlz01/mexico-open-streetcameras/releases/latest/download/GATSO_ALL.csv`
+- `https://raw.githubusercontent.com/danielnzlz01/mexico-open-streetcameras/main/GATSO_ALL.csv`
 
-1. **OpenStreetMap (Nationwide Mexico)** — queried via the Overpass API (`area["ISO3166-1"="MX"]["admin_level"="2"]`) across multiple fallback mirrors for:
+## Data Sources & Enrichment Pipeline
+
+Sources are merged with strict precedence **`data/manual_mx.csv` > CDMX *Fotocívicas* > OpenStreetMap** and deduplicated within **25 meters**:
+
+1. **Curated Manual Overrides (`data/manual_mx.csv`)** — highest priority for adding unmapped cameras, correcting speed limits/types, or suppressing confirmed false positives.
+2. **CDMX Open Data — *Fotocívicas (Ubicación puntos)*** — fetched from the Secretaría de Movilidad ([`datos.cdmx.gob.mx`](https://datos.cdmx.gob.mx/dataset/informacion-fotocivicas)) with automatic fallback to [`data/cdmx_fotocivicas_cache.csv`](data/cdmx_fotocivicas_cache.csv) when the portal is unreachable.
+3. **OpenStreetMap (Nationwide Mexico)** — queried via Overpass (`area["ISO3166-1"="MX"]["admin_level"="2"]`) across multiple fallback mirrors for:
    - `node["highway"="speed_camera"]`
    - `node["enforcement"="maxspeed" | "traffic_signals" | "average_speed"]`
-   - `relation["type"="enforcement"]` (inheriting `maxspeed`, `enforcement`, and travel direction onto member `device` nodes, plus parent road `maxspeed` fallback; excluding non-traffic `surveillance` CCTV).
-2. **CDMX Open Data — *Fotocívicas (Ubicación puntos)*** — fetched from the Secretaría de Movilidad ([`datos.cdmx.gob.mx`](https://datos.cdmx.gob.mx/dataset/informacion-fotocivicas)) with automatic fallback to a committed local snapshot ([`data/cdmx_fotocivicas_cache.csv`](data/cdmx_fotocivicas_cache.csv)) if the government portal is unreachable during a scheduled run.
+   - `relation["type"="enforcement"]` (including `device` members tagged `highway=speed_camera` or `man_made=surveillance`, while excluding non-traffic `enforcement=surveillance` CCTV).
+4. **Secondary Metadata-Only Enrichment:**
+   - **CDMX Legacy *Fotomultas (Ubicaciones)*** — used strictly to backfill missing `maxspeed`/type on existing OSM or *Fotocívicas* points within 25 m (never inserts standalone legacy locations).
+   - **Batched Nearest-Road `maxspeed` Inference** — queries Overpass `way(around:15)["highway"]["maxspeed"]` in batched chunks for cameras missing a numeric speed limit, preferring the highest road class (`motorway > trunk > primary > secondary > tertiary > residential`).
 
-Records are validated against Mexico's bounding box (`lat ∈ [14.5, 32.8]`, `lon ∈ [-118.5, -86.5]`), deduplicated within **25 meters** (preserving the richest speed-limit and camera-type metadata), and sorted deterministically by latitude/longitude.
+## Adding or Suppressing Cameras (`data/manual_mx.csv`)
+
+You can patch missing or mislabeled cameras (e.g., Edomex, Puebla's *Monitor Vial*, Jalisco, or federal highways) directly in [`data/manual_mx.csv`](data/manual_mx.csv) without waiting for OpenStreetMap edits.
+
+Schema:
+```csv
+lat,lon,type,maxspeed,direction,active,source,notes
+```
+
+- **`lat`, `lon`**: WGS84 decimal coordinates within Mexico (`lat` first in `manual_mx.csv`; `build_feed.py` outputs `lon,lat` in `GATSO_ALL.csv`).
+- **`type`**: `speed`, `redlight`, or `average_speed`.
+- **`maxspeed`**: Numeric limit in km/h (e.g., `80`), or blank to allow nearest-road inference.
+- **`direction`**: Optional compass heading in degrees (`0`–`359`) or cardinal (`N`, `SE`, etc.).
+- **`active`**:
+  - `true` — adds the camera (or overrides any OSM / *Fotocívicas* point within **25 m**).
+  - `false` — **suppression rule** that removes any OSM / *Fotocívicas* false positive within **25 m** during the merge.
+- **`source`, `notes`**: Attribution and brief location context (e.g., `MonitorVial`, `Periférico Ecológico km 12`).
+
+Example rows (do not commit placeholder coordinates):
+```csv
+19.041400,-98.206300,speed,70,180,true,MonitorVial,Puebla Periférico Ecológico
+19.423568,-99.131166,speed,,,false,field_check,Confirmed decommissioned camera
+```
 
 ## CSV Schema & Release Format
 
 Each GitHub Release publishes:
-- `csv_files.zip` containing:
-  - `GATSO_ALL.csv` — Open Zeekr / Garmin-POI feed
-  - `mx_speed_cameras.csv` — enriched dataset with `osm_id`, `lat`, `lon`, `maxspeed_kmh`, `direction_deg`, `type`, `road_name`, `source`
-  - `ATTRIBUTION.md` — data licenses & attribution
-- `GATSO_ALL.csv` (standalone asset, also tracked in this repository root)
+- `GATSO_ALL.csv` (standalone asset, also tracked on `main`)
+- `csv_files.zip` containing `GATSO_ALL.csv`, `mx_speed_cameras.csv`, and `ATTRIBUTION.md`
+- `mx_speed_cameras.csv` (enriched metadata CSV)
 
 `GATSO_ALL.csv` specification:
-- **Columns (no header row):** `longitude,latitude,"name","comment"` (longitude first)
+- **Columns (no header row):** `longitude,latitude,"name","comment"` (**longitude first**)
 - **Encoding & line endings:** UTF-8 (no BOM), LF (`\n`), comma-delimited, RFC 4180 double-quoted text fields
-- **Camera labels (`name`):** `max @<km/h>`, `max`, `stop` (red-light), or `average @<km/h>`
+- **Camera labels (`name`):** `max @<km/h>`, `max`, `stop @<km/h>`, `stop`, `average @<km/h>`, or `average`
 - **Comments (`comment`):** `MX Radar fixed_speed`, `MX Radar redlight`, `MX Radar redlight_speed`, or `MX Radar average_speed`
-
-Example rows:
-```csv
--99.119721,19.405605,"max @80","MX Radar fixed_speed"
--99.131166,19.423568,"stop","MX Radar redlight"
-```
 
 ## Update Schedule
 
-The GitHub Actions workflow ([`.github/workflows/update-feed.yml`](.github/workflows/update-feed.yml)) runs automatically:
+The GitHub Actions workflow ([`.github/workflows/update-feed.yml`](.github/workflows/update-feed.yml)) runs:
 - **Weekly** every **Sunday at 06:00 UTC**
 - On-demand via **Actions → Update Mexico Speed & Red-Light Camera Feed → Run workflow** (`workflow_dispatch`)
 
-Each run rebuilds `GATSO_ALL.csv`, executes the `pytest` validation suite, commits changes to `main` if the dataset changed, and publishes a new GitHub Release with `csv_files.zip` so Open Zeekr picks up updates automatically.
+Every run rebuilds `GATSO_ALL.csv`, executes `pytest -v`, commits updates to `main` when changed, and updates the `latest` GitHub Release (creating a new release tag when changed, or refreshing assets in place with `--clobber` so `releases/latest/download/GATSO_ALL.csv` and `csv_files.zip` always return HTTP 200).
 
 ## Local Development & Verification
 
