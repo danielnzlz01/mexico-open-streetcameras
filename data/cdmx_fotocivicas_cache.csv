@@ -1,0 +1,114 @@
+ubi,no,via_princi,ubicacion,sentido,y,x
+1,1,Eje 3 Sur,Eje 3 Sur (Dr. Morones Prieto) y Dr. Jos? Ma. V?rtiz,Oriente a Poniente,19.4068610,-99.1494280
+2,2,Fray Servando,Escuela M?dico Militar - Jos? Antonio Torres Xocongo y Fray Servando Teresa de Mier,Poniente a Oriente,19.4235680,-99.1311660
+3,3,Circuito Bicentenario Maestro Jos? Vasconcelos,Circuito Bicentenario Maestro Jos? Vasconcelos y Av. Benjam?n Franklin,Norte a Sur,19.4079570,-99.1841970
+4,4,Izazaga,Jos? Mar?a Izazaga y Jos? Mar?a Pino Su?rez,Oriente a Poniente,19.4259180,-99.1329170
+5,5,Universidad,Eje 9 Sur Miguel ?ngel de Quevedo y Av. Universidad,Sur a Norte,19.3468740,-99.1801310
+5,5,Universidad,Eje 9 Sur Miguel ?ngel de Quevedo y Av. Universidad,Sur a Norte,19.3466070,-99.1806920
+6,6,Zaragoza,Calz Gral. Ignacio Zaragoza y Viaducto,Poniente a Oriente,19.4087720,-99.0774770
+7,7,Insurgentes,Insurgentes Buenavista y Eje 1 Norte,Sur a Norte,19.4463850,-99.1534430
+8,8,Eje 1 Norte,Eje 1 Norte - Insurgentes - Buenavista,Poniente a Oriente,19.4459410,-99.1531840
+8,8,Eje 1 Norte,Eje 1 Norte - Insurgentes - Buenavista,Poniente a Oriente,19.4463850,-99.1534430
+9,9,Av. Instituto Polit?cnico Nacional,Av. Instituto Polit?cnico Nacional y Eje 5 Nte Montevideo,Norte a Sur,19.4911880,-99.1335740
+10,10,Calzada de Misterios,Calzada de Misterios y Eje 3 Norte Av. Alfredo Robles Dom?nguez,Norte a Sur,19.4684710,-99.1249410
+11,11,Chapultepec,Chapultepec - Sonora - Lieja,Oriente a Poniente,19.4213240,-99.1739310
+12,12,Eje 1 Norte,Eje 1 Norte Mosqueta - Paseo de la Reforma y Eje Central L?zaro C?rdenas,Poniente a Oriente,19.4441370,-99.1400030
+13,13,Paseo de la Reforma,Paseo de la Reforma y Eje Central L?zaro C?rdenas y Eje 1 Norte Mosqueta,Norte a Sur,19.4439080,-99.1391010
+14,14,Perif?rico,Perif?rico Oriente Canal de Garay - Av. Tl?huac y San Lorenzo,Norte a Sur,19.3187210,-99.0755770
+15,15,Eje 8 Sur Ermita Iztapalapa,Eje 8 Sur Ermita Iztapalapa y Eje 6 Sur Narciso Mendoza,Sur a Norte,19.3765150,-99.0591280
+16,16,Eje 6 Sur Narciso Mendoza,Eje 6 Sur Narciso Mendoza y  Eje 8 Sur Ermita Iztapalapa,Oriente a Poniente,19.3521390,-99.0153520
+17,17,Marina Nacional,Calz Gral. Mariano Escobedo y Av. Marina Nacional,Norte a Sur,19.4481480,-99.1824180
+18,18,Eje 1 Oriente,"Eje 1 Oriente Av. del Trabajo, Eje 2 Norte Canal del Norte y Av. Circunvalaci?n",Norte a Sur,19.4520920,-99.1247520
+19,19,Eje 2 Norte,Eje 2 Norte Canal del Norte y Av. Circunvalaci?n y Eje 1 Oriente Av. del Trabajo,Oriente a Poniente,19.4520920,-99.1247070
+20,20,Eje 1 Poniente Guerrero,Eje 1 Poniente Guerrero y Eje 2 Norte Manuel Gonz?lez,Norte a Sur,19.4562510,-99.1450480
+21,21,Eje 4 Oriente,Eje 4 Ote. Canal Rio Churubusco y Canal de Apatlaco,Norte a Sur,19.3799540,-99.0956820
+22,22,Taxque?a,Eje 9 Sur Taxque?a y Eje 1 Oriente Canal de Miramontes,Oriente a Poniente,19.3411270,-99.1373710
+23,23,Eje 1 Oriente,Eje 1 Oriente Canal de Miramontes y Eje 9 Sur Taxque?a y Cerro de Teponaxtle,Sur a Norte,19.3409730,-99.1373890
+24,24,Av. Ej?rcito Nacional Mexicano,Av. Ej?rcito Nacional Mexicano y Anillo Perif?rico Boulevard Manuel ?vila Camacho,Oriente a Poniente,19.4389510,-99.2135150
+25,25,Eje 5 Sur,Eje 5 Sur y Anillo Periferico Oriente,Oriente a Poniente,19.3466070,-99.1806920
+26,26,Eje 6 Sur,Eje 6 Sur Playa Pie de la Cuesta y Eje 1 Ote. Andr?s Molina Enr?quez,Poniente a Oriente,19.3771150,-99.1299330
+27,27,Eje Central,Eje Central L?zaro C?rdenas y Av. Ricardo Flores Mag?n,Sur a Norte,19.4495580,-99.1383990
+28,28,Guadalupe I. Ramirez,Av. Guadalupe I. Ram?rez y Prol. Divisi?n del Norte,Oriente a Poniente,19.2659280,-99.1147590
+29,29,Eje 6 Sur,Eje 6 Sur Av. Luis M?ndez y Carlos L Gracidas,Poniente a Oriente,19.3622780,-99.0491560
+30,30,Revoluci?n,Eje 4 Pte. Av. Revoluci?n y Av. Barranca del Muerto,Norte a Sur,19.3632790,-99.1891060
+31,31,Eje 3 Poniente,Eje 3 Pte. Thiers y Darwin,Norte a Sur,19.4299570,-99.1747310
+32,32,Andr?s Molina Enr?quez,Eje 1 Ote. Andr?s Molina Enr?quez y Eje 5 Sur Playa Villa del Mar,Norte a Sur,19.3814040,-99.1294930
+33,33,Arcos de Bel?n,Jose Maria Izazaga y Eje Central L?zaro C?rdenas,Oriente a Poniente,19.4265840,-99.1418680
+34,34,Eje 2 Norte,Eje 2 Norte Manuel Gonz?lez y Eje Central L?zaro C?rdenas,Oriente a Poniente,19.4547180,-99.1382650
+35,35,Eje 3 Oriente,Eje 3 Oriente Ing. Eduardo Molina y Eje 5 Norte San Juan de Arag?n,Sur a Norte,19.4786280,-99.0978190
+36,36,Pino Su?rez,Jos? Mar?a Pino Su?rez y Venustiano Carranza,Norte a Sur,19.4309870,-99.1322970
+37,37,Av. Instituto Polit?cnico Nacional,Av. Instituto Polit?cnico Nacional y Av. Ricarte,Sur a Norte,19.4882760,-99.1339810
+38,38,Eje 8 Sur,Eje 8 Sur Ermita Iztapalapa y Eje 5 Ote Av. Rojo G?mez,Oriente a Poniente,19.4821840,-99.1339780
+39,39,Av. Constituyentes,Av. Constituyentes y Gob. Gregorio Villa Gelati,Oriente a Poniente,19.4130170,-99.1897980
+40,40,Av. Marina Nacional,Av. Marina Nacional y Felipe Carrillo Puerto,Sur a Norte,19.4520233,-99.1855748
+41,41,Calz. Gral. Ignacio Zaragoza,Calz. Gral. Ignacio Zaragoza y Circuito Bicentenario Boulevard Puerto  A?reo,Oriente a Poniente,19.4199330,-99.0958670
+42,42,Av. Aquiles Serd?n,Av. Aquiles Serd?n y Av. Tezozomoc,Sur a Norte,19.4896790,-99.1944110
+43,43,Eje Central,Eje Central L?zaro C?rdenas y Avenida Hidalgo,Sur a Norte,19.4359178,-99.1406917
+44,44,Eje Central,Eje Central y Margarita Maza de Juarez,Sur a Norte,19.5084073,-99.1517260
+45,45,Calz. Gral. Ignacio Zaragoza,Calz Gral. Ignacio Zaragoza y Circuito Bicentenario Boulevard Puerto  A?reo,Poniente a Oriente,19.4199150,-99.0967950
+46,46,Poniente a Oriente,Av. Cuitl?huac,19.473673,19.4736730,-99.1588900
+47,1,Av. Paseo de la Reforma,Av. Paseo de la Reforma y Estela  de Luz,Oriente a Poniente,19.4235850,-99.1753990
+48,2,Av. Paseo de la Reforma,Av. Paseo de la Reforma e Ignacio Allende,Sur a Norte,19.4459220,-99.1370330
+49,3,Av. Chapultepec,Av. Chapultepec y Guaymas,Poniente a Oriente,19.4253317,-99.1556279
+50,4,Fray Servando Teresa de Mier,Fray Servando Teresa de Mier y Cucurpe,Poniente a Oriente,19.4215211,-99.1184883
+51,5,Eje Central L?zaro C?rdenas,Eje Central L?zaro C?rdenas y Fortuna,Sur a Norte,19.4866660,-99.1432010
+52,6,Viaducto R?o de la Piedad,Viaducto R?o de la Piedad y 1ro de Mayo,Poniente a Oriente,19.4056047,-99.1197212
+53,7,Eje 3 Sur Jos? Pe?n,Eje 3 Sur Jos? Pe?n y Contreras y Jos? Mar?a Bustillos,Oriente  a Poniente,19.4073524,-99.1411463
+54,8,Anillo Perif?rico Canal de Garay,Anillo Perif?rico Canal de Garay y Lebrija,Norte a Sur,19.3235340,-99.0718470
+55,9,Anillo Perif?rico,Anillo Perif?rico y Embarcadero del Parque Ecol?gico de Xochimilco,Poniente a Oriente,19.2970067,-99.0955850
+56,10,Calz. Vallejo,Calz. Vallejo y Cuauht?moc,Norte a Sur,19.4698112,-99.1447284
+57,11,Calz. Vallejo,Calz. Vallejo y Calle Pino Su?rez,Norte a Sur,19.5119210,-99.1607480
+58,12,Eje 5 Av. Montevideo,Eje 5 Av. Montevideo y Pulacayo,Oriente a Poniente,19.4895190,-99.1299030
+59,13,Eje 5 Av. Montevideo,Eje 5 Av. Montevideo y Nte. 31-A,Oriente a Poniente,19.4943507,-99.1502647
+60,14,Av. Calzada Ignacio Zaragoza,Av. Calzada Ignacio Zaragoza y Azc?rraga Vidaurreta,Poniente a Oriente,19.3889366,-99.0423924
+61,15,Calz. Ignacio Zaragoza,Calz. Ignacio Zaragoza y Anselmo de la Portilla,Poniente a Oriente,19.4227350,-99.1019040
+62,16,Eje 8 Sur Ermita Iztapalapa,Eje 8 Sur Ermita Iztapalapa y Roc?o,Oriente a Poniente,19.3427999,-99.0564653
+63,17,Av. Ej?rcito Nacional,Av. Ej?rcito Nacional y Calle Luis Vives,Poniente a Oriente,19.4387035,-99.2097713
+64,18,Calz. De Tlalpan,Calz. De Tlalpan y Calle Atletas,Sur a Norte,19.3544699,-99.1445281
+65,19,Calz. De Tlalpan,Calz. De Tlalpan y Museo,Norte a Sur,19.3287573,-99.1398364
+66,20,Av. Revoluci?n,Av. Revoluci?n y Calle 13,Norte a Sur,19.3906504,-99.1859205
+67,21,Eje 2 Nte. Manuel Gonz?lez,Eje 2 Nte. Manuel Gonz?lez y Calle General Ignacio Zaragoza,Oriente a Poniente,19.4565453,-99.1463572
+68,22,Av. Canal del Nte.,Av. Canal del Nte. y Tenochtitl?n,Oriente a Poniente,19.4526233,-99.1273266
+69,23,Eje 1 Nte. Jos? Antonio ?lzate,Eje 1 Nte. Jos? Antonio ?lzate y Naranjo,Poniente a Oriente,19.4472440,-99.1595530
+70,24,Eje 1 Nte. Mosqueta,Eje 1 Nte. Mosqueta y Soto,Poniente a Oriente,19.4447801,-99.1440693
+71,25,Eje Central L?zaro C?rdenas,Eje Central L?zaro C?rdenas y Toribio Medina,Sur a Norte,19.4071200,-99.1446440
+72,26,Circuito Bicentenario Calz. Melchor Ocampo,Circuito Bicentenario Calz. Melchor Ocampo y Nezahualpilli,Norte a Sur,19.4404601,-99.1675379
+73,27,Circuito Bicentenario Melchor Ocampo,Circuito Bicentenario Melchor Ocampo y R?o Duero,Sur a Norte,19.4285900,-99.1741747
+74,28,Circuito Bicentenario Instituto T?cnico Industrial,Circuito Bicentenario Instituto T?cnico Industrial y Calle Eligio Ancona,Sur a Norte,19.4533400,-99.1639460
+75,29,Circuito Bicentenario Av. R?o Consulado,Circuito Bicentenario Av. R?o Consulado y Cant?n,Poniente a Oriente,19.4511166,-99.0962819
+76,30,Circuito Bicentenario Av. R?o Consulado,Circuito Bicentenario Av. R?o Consulado y Av. Encarnaci?n Ort?z,Oriente a Poniente,19.4635760,-99.1484820
+77,31,Circuito Bicentenario Av. R?o Consulado,Circuito Bicentenario Av. R?o Consulado y Av. Congreso de la Uni?n,Poniente a Oriente,19.4561169,-99.1144101
+78,32,Av. Constituyentes,Av. Constituyentes y Camino de los Toros,Poniente a Oriente,19.4062947,-99.2022534
+79,33,Av.608,Av.608 y Av. 508,Oriente a Poniente,19.4537273,-99.0755043
+80,34,Av. Ocean?a,Av. Ocean?a y Pablo R. Sidar,Poniente a Oriente,19.4391863,-99.0972188
+81,35,Av. Insurgentes Nte.,Av. Insurgentes Nte. y Pte. 112,Sur a Norte,19.4735857,-99.1347510
+82,36,Av. Insurgentes Nte.,Av. Insurgentes Nte. y Av. Ricarte,Norte a Sur,19.4840790,-99.1266090
+83,37,Circuito Bicentenario Boulebard Puerto Aereo,Circuito Bicentenario Boulebard Puerto Aereo y Norte 25,Sur  a Norte,19.4375679,-99.0861399
+84,38,Calz. Ignacio Zaragoza,Calz. Ignacio Zaragoza y Primavera,Poniente a Oriente,19.3960176,-99.0550857
+85,39,Circuito Bicentenario Av. Rio Churubusco,Circuito Bicentenario Av. Rio Churubusco y Gerentes,Sur a Norte,19.3792900,-99.0956670
+86,40,Perif?rico 2P S-N,Perif?rico 2P S-N Aurelio Rivera/Pino,Sur a Norte,19.3431643,-99.2027342
+87,41,Perif?rico 2P S-N,Perif?rico 2P S-N Calz. Catarina y Av. Le?n Felipe,Sur a Norte,19.3503060,-99.2007770
+88,42,Perif?rico 2P S-N,Perif?rico 2P S-N/Cda las Flores y Calz de las ?guilas,Sur a Norte,19.3593912,-99.1932155
+89,43,Perif?rico 2P S-N,Perif?rico 2P S-N / Etna y Ajusco,Norte a Sur,19.3594110,-99.1938440
+90,44,Perif?rico 2P S-N,Perif?rico 2P S-N / R?o San ?ngel y Rinc. Atlamaya,Norte a Sur,19.3542440,-99.1999330
+91,45,Perif?rico 2P S-N,Perif?rico 2P S-N / Miguel Cabrera y La Casta?eda,Norte a Sur,19.3710110,-99.1914430
+92,46,Perif?rico 2P S-N,Perif?rico 2P S-N / Dr. Glez. Herrej?n / Lomas de Plateros,Norte a Sur,19.3727515,-99.1921234
+93,47,Autopista Urbana Norte (AUN),AUN / Deportivo Israelita /Ing. Zapadores y Av. del Conscripto,Sur a Norte,19.4479250,-99.2207590
+94,48,Autopista Urbana Norte (AUN),AUN /Gral. Juan Cabral y Batalla de Celaya,Sur a Norte,19.4387655,-99.2142775
+95,49,Autopista Urbana Norte (AUN),AUN /   Fernando Alencastre y Av. de los Constituyentes,Sur a Norte,19.4192810,-99.1955130
+96,50,Autopista Urbana Norte (AUN),AUN /  Calle 16 y Av. San Antonio,Sur a Norte,19.3847466,-99.1931371
+97,51,Autopista Urbana Norte (AUN),AUN / Av. R?o Becerra y 11 de Abril,Norte a Sur,19.3952460,-99.1887130
+98,52,Autopista Urbana Norte (AUN),AUN / Gobernador Jos? Ceballos y Av. Constituyentes,Norte a Sur,19.4100026,-99.1921155
+99,53,Autopista Urbana Norte (AUN),AUN / Av. Ej?rcito Nacional y Miguel de Cervantes Saavedra,Norte a Sur,19.4100026,-99.1921155
+127,2,Paseo de la Reforma - Eje 1 Poniente - Ju?rez,Eje 1 Poniente,Norte a Sur,19.4359650,-99.1497260
+128,3,Av. Hidalgo - Paseo de la Reforma y Zarco,Av. Hidalgo,Oriente a Poniente,19.4374030,-99.1457920
+129,4,Av. Revolucion - Eje 10 Sur Loreto,Av. Revolución,Norte a Sur,19.3388370,-99.1921180
+130,5,Eje 8 Sur y Av. Universidad,Eje 8 Sur,Poniente a Oriente,19.3664260,-99.1678490
+131,6,Eje 7 Sur Municipio Libre y Division del Norte,Eje 7 Sur,Oriente a Poniente,19.3703310,-99.1565490
+132,7,Eje 2 Oriente La viga y Circuito Bicentenario Rio Churubusco,Eje 2 Oriente,Sur a Norte,19.3688290,-99.1224080
+133,8,San Lorenzo y Eje 8 Sur,San Lorenzo,Sur a Norte,19.3509680,-99.0747800
+134,9,Calz. Gral. Mariano Escobedo y Laguna de T?rminos,Calz. Gral. Mariano Escobedo,Sur a Norte,19.4433640,-99.1830730
+135,10,Av. Tláhuac y Ganaderos,Av. Tláhuac,Sur a Norte,19.3491570,-99.1068690
+136,11,Av. Rivera de San Cosme y Santa Mar?a La Rivera,Av. San Cosme,Oriente a Poniente,19.4409770,-99.1583700
+137,12,Eje Central Lázaro Cárdenas y Circuito Bicentenario Paseo de las Jacarandas,Eje Central Lázaro Cárdenas,Sur a Norte,19.4648980,-99.1373740
+138,13,Circuito Bicentenario Av. Rio Consulado y Av. Ing. Eduardo Molina,Circuito Bicentenario Av. Rio Consulado,Sur a Norte,19.4523151,-99.1088224
